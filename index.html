@@ -384,8 +384,7 @@ function toEnglish(q){
    déjà colorié en blanc. Rien n'est embarqué : le fichier ne grossit pas d'un octet. */
 const ICONIFY = 'https://api.iconify.design';
 let icoSeq = 0;
-
-const icoURL  = (id, h) => `${ICONIFY}/${id.replace(':','/')}.svg?height=${h}&color=%23ffffff`;
+const iconBodyCache = new Map();  // "prefix:nom" -> {body, width, height, left, top}
 
 async function iconifySearch(q){
   const en  = toEnglish(q);
@@ -396,12 +395,53 @@ async function iconifySearch(q){
   return { icons: d.icons || [], en };
 }
 
-/* Le SVG est rapatrié en pleine résolution, normalisé, blanchi, rogné. */
+/* Regroupe les icônes par collection pour ne faire qu'un appel JSON par collection
+   (au lieu d'une requête image par icône), et met les tracés en cache. L'endpoint
+   image .svg d'Iconify est trop souvent bloque par leur pare-feu quand on charge
+   une grille entière d'icônes d'un coup ; l'API JSON, elle, reste accessible. */
+async function ensureIconData(ids){
+  const byPrefix = new Map();
+  for(const id of ids){
+    if(iconBodyCache.has(id)) continue;
+    const [prefix, name] = id.split(':');
+    if(!byPrefix.has(prefix)) byPrefix.set(prefix, []);
+    byPrefix.get(prefix).push(name);
+  }
+  await Promise.all([...byPrefix.entries()].map(async ([prefix, names])=>{
+    try{
+      const url = `${ICONIFY}/${prefix}.json?icons=${names.map(encodeURIComponent).join(',')}`;
+      const r = await fetch(url);
+      if(!r.ok) return;
+      const d = await r.json();
+      const dw = d.width || 24, dh = d.height || 24;
+      for(const name of Object.keys(d.icons || {})){
+        const ic = d.icons[name];
+        iconBodyCache.set(`${prefix}:${name}`, {
+          body: ic.body, width: ic.width || dw, height: ic.height || dh,
+          left: ic.left || 0, top: ic.top || 0,
+        });
+      }
+    }catch(e){ console.error(e); }
+  }));
+}
+
+function iconSVGMarkup(id, color){
+  const d = iconBodyCache.get(id);
+  if(!d) return null;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${d.left} ${d.top} ${d.width} ${d.height}" fill="${color}">${d.body}</svg>`;
+}
+const iconDataURI = (id, color) => {
+  const svg = iconSVGMarkup(id, color);
+  return svg ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}` : '';
+};
+
+/* Le SVG est reconstruit en pleine résolution, normalisé, blanchi, rogné. */
 async function addIconifyIcon(id){
   try{
-    const r = await fetch(icoURL(id, 512));
-    if(!r.ok) throw new Error('http '+r.status);
-    const img = await decodeSVGText(await r.text());
+    await ensureIconData([id]);
+    const svg = iconSVGMarkup(id, '#ffffff');
+    if(!svg) throw new Error('icône introuvable : '+id);
+    const img = await decodeSVGText(svg);
     addOrnament(whiten(trimImage(imgToCanvas(img))), id.split(':')[1] || id);
     closePicker();
     toast(id.replace(':', ' · '));
@@ -414,7 +454,7 @@ async function renderIconify(){
   const seq   = ++icoSeq;
   if(!pickQ.trim()){
     count.textContent = '~200 000 icônes';
-    grid.innerHTML = '<div class="pick-msg">Tapez un mot — en français — pour chercher parmi ~200 000 icônes.<br>La requête est traduite automatiquement.</div>';
+    grid.innerHTML = '<div class="pick-msg">Tapez un mot — en français — pour chercher parmi ~200 000 icônes.<br>La requête est traduite automatiquement.</div>';
     return;
   }
   count.textContent = '…';
@@ -427,11 +467,15 @@ async function renderIconify(){
       grid.innerHTML = `<div class="pick-msg">Aucune icône pour « ${esc(en)} ».</div>`;
       return;
     }
-    grid.innerHTML = icons.map(id=>
-      `<button class="icard" data-ico="${esc(id)}" title="${esc(id)}">
-         <img class="ico" src="${icoURL(id, 64)}" alt="" loading="lazy">
+    await ensureIconData(icons);
+    if(seq !== icoSeq) return;                       // idem après le chargement des traces
+    grid.innerHTML = icons.map(id=>{
+      const uri = iconDataURI(id, '#ffffff');
+      return uri ? `<button class="icard" data-ico="${esc(id)}" title="${esc(id)}">
+         <img class="ico" src="${uri}" alt="" loading="lazy">
          <span>${esc((id.split(':')[1]||id).replace(/-/g,' '))}</span>
-       </button>`).join('');
+       </button>` : '';
+    }).join('');
   }catch(e){
     if(seq !== icoSeq) return;
     console.error(e);
@@ -580,9 +624,10 @@ async function loadFont(fam){
 /* ─── Recettes de genre et thèmes libres ─── */
 /* Récupère un SVG Iconify par identifiant complet, le blanchit, le pose comme icône. */
 async function fetchIconify(id, label){
-  const r = await fetch(icoURL(id, 512));
-  if(!r.ok) throw new Error('http '+r.status);
-  const img = await decodeSVGText(await r.text());
+  await ensureIconData([id]);
+  const svg = iconSVGMarkup(id, '#ffffff');
+  if(!svg) throw new Error('icône introuvable : '+id);
+  const img = await decodeSVGText(svg);
   addOrnament(whiten(trimImage(imgToCanvas(img))), label || id.split(':')[1] || id);
 }
 
