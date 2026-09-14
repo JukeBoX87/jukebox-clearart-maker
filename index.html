@@ -428,7 +428,7 @@ async function ensureIconData(ids){
 function iconSVGMarkup(id, color){
   const d = iconBodyCache.get(id);
   if(!d) return null;
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${d.left} ${d.top} ${d.width} ${d.height}" fill="${color}">${d.body}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${d.left} ${d.top} ${d.width} ${d.height}" fill="${color}" color="${color}">${d.body}</svg>`;
 }
 const iconDataURI = (id, color) => {
   const svg = iconSVGMarkup(id, color);
